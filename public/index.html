@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>서울 아파트 AI 예측 | 국토교통부 공공데이터 기반</title>
+  <meta name="description" content="국토교통부 실거래가 공공데이터(2023~2024, 67,430건)로 학습한 AI로 서울 아파트 가격을 예측합니다.">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <!-- 앱 스타일 -->
+  <link rel="stylesheet" href="style.css">
+
+  <style>
+    /* Leaflet 툴팁 커스텀 */
+    .leaflet-tooltip-custom {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #f1f5f9;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    }
+    .leaflet-tooltip-custom::before { display: none; }
+
+    /* 단지 배지 */
+    .complex-badge {
+      display: inline-block;
+      font-size: 11px;
+      color: var(--accent);
+      background: rgba(59,130,246,.12);
+      border: 1px solid rgba(59,130,246,.3);
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-top: 4px;
+      font-weight: 600;
+    }
+
+    /* 정확도 향상 힌트 */
+    .accuracy-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      padding: 4px 8px;
+      background: rgba(34,197,94,.07);
+      border-radius: 4px;
+      border-left: 2px solid var(--signal-under);
+    }
+
+    /* 단지 선택 시 헤더 보조 텍스트 */
+    .complex-info-text {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- ── 헤더 ─────────────────────────────────────────────────────────── -->
+  <header class="site-header">
+    <span class="logo">🏢</span>
+    <div>
+      <h1>서울 아파트 AI 예측</h1>
+      <div class="header-sub">국토교통부 실거래가 공공데이터 기반 · 서울 25개 구 · 67,430건 학습</div>
+    </div>
+  </header>
+
+  <!-- ── 메인 레이아웃 (입력/결과 | 지도) ─────────────────────────────── -->
+  <div class="main-layout">
+
+    <!-- 왼쪽: 입력 + 결과 -->
+    <div class="left-col">
+
+      <!-- 입력 카드 -->
+      <div class="card">
+        <div class="card-title">🔍 조건 입력</div>
+        <div class="form-grid">
+
+          <!-- ① 구 선택 -->
+          <div class="form-field">
+            <label for="gu-select">구 선택 <span class="required">*</span></label>
+            <select id="gu-select" class="form-input">
+              <option value="">— 구를 선택하세요 —</option>
+            </select>
+            <div id="district-ref-info" class="district-ref-info" style="display:none;"></div>
+          </div>
+
+          <!-- ② 단지 선택 (선택 입력 — gu 선택 후 로드) -->
+          <div class="form-field" id="complex-field">
+            <label for="complex-select">
+              단지 선택 <span class="optional-tag">선택</span>
+            </label>
+            <select id="complex-select" class="form-input" disabled>
+              <option value="">— 구 선택 후 자동 로드 —</option>
+            </select>
+            <div class="accuracy-hint" id="accuracy-hint" style="display:none;">
+              ✨ 단지 선택 시 예측 정확도가 향상됩니다
+            </div>
+          </div>
+
+          <!-- ③ 면적 + 층수 -->
+          <div class="form-row">
+            <div class="form-field">
+              <label for="area">전용면적 (m²) <span class="required">*</span></label>
+              <input id="area" type="number" class="form-input"
+                     placeholder="예: 84" min="1" max="500" step="0.01">
+            </div>
+            <div class="form-field">
+              <label for="floor">층수 <span class="required">*</span></label>
+              <input id="floor" type="number" class="form-input"
+                     placeholder="예: 10" min="1" max="100">
+            </div>
+          </div>
+
+          <!-- ④ 건축연도 -->
+          <div class="form-field">
+            <label for="built">건축연도 <span class="required">*</span></label>
+            <input id="built" type="number" class="form-input"
+                   placeholder="예: 2010" min="1960" max="2024">
+          </div>
+
+          <button id="predict-btn" class="predict-btn">
+            <span class="btn-icon">🤖</span> 예측하기
+          </button>
+        </div>
+      </div>
+
+      <!-- 결과 패널 (6개 UI 상태) -->
+      <div id="result-panel" data-ui-state="idle" class="card result-card">
+
+        <!-- ① idle -->
+        <div class="state-view state-idle">
+          <div class="idle-icon">📊</div>
+          <p>구와 조건을 입력하고<br><strong>예측하기</strong>를 누르면<br>AI가 실거래 데이터를 기반으로<br>시세를 분석합니다.</p>
+          <div class="idle-features">
+            <span>🗺 지도 시각화</span>
+            <span>📈 24개월 추이</span>
+            <span>🎯 투자 신호</span>
+          </div>
+        </div>
+
+        <!-- ② loading -->
+        <div class="state-view state-loading">
+          <div class="loading-header">
+            <div class="spinner"></div>
+            <div class="card-title" style="margin:0;">AI 추론 중...</div>
+          </div>
+          <div class="skeleton sk-title"></div>
+          <div style="height:10px"></div>
+          <div class="skeleton sk-price"></div>
+          <div style="height:8px"></div>
+          <div class="skeleton sk-bar"></div>
+          <div style="height:8px"></div>
+          <div class="skeleton sk-chips"></div>
+          <div style="height:8px"></div>
+          <div class="skeleton sk-chart"></div>
+        </div>
+
+        <!-- ③ success -->
+        <div class="state-view state-success">
+          <!-- 단지 배지 (단지 선택 시만 표시) -->
+          <div id="complex-badge-wrap" style="margin-bottom:10px;display:none;">
+            <span class="complex-badge" id="complex-badge-text">🏢 —</span>
+            <span class="complex-info-text">단지 선택됨 — 정밀 예측 적용</span>
+          </div>
+
+          <div class="result-header">
+            <div>
+              <div class="result-price-main" id="res-price-main">—</div>
+              <div class="result-price-sub"  id="res-price-sub">—</div>
+            </div>
+            <div>
+              <span class="signal-badge" id="signal-badge" data-signal="fair">—</span>
+            </div>
+          </div>
+
+          <!-- 투자 신호 설명 -->
+          <div id="signal-desc" class="signal-desc-text">—</div>
+
+          <!-- 가격 범위 바 -->
+          <div class="price-range-wrap">
+            <div class="range-labels-top">
+              <span class="range-hint">예측 구간</span>
+              <span id="conf-pct" class="conf-inline">—</span>
+            </div>
+            <div class="price-range-bar">
+              <div class="price-range-fill"></div>
+              <div class="price-range-marker" id="price-marker" style="left:50%"></div>
+            </div>
+            <div class="price-range-labels">
+              <span id="range-lower">—</span>
+              <span id="range-upper">—</span>
+            </div>
+          </div>
+
+          <!-- 신뢰도 바 -->
+          <div class="confidence-wrap">
+            <span class="confidence-label">신뢰도</span>
+            <div class="confidence-bar-track">
+              <div class="confidence-bar-fill" id="conf-fill" style="width:0%"></div>
+            </div>
+            <span class="confidence-pct-val" id="conf-pct-val">—</span>
+          </div>
+
+          <!-- 비교 수치 그리드 -->
+          <div class="comparison-grid">
+            <div class="cmp-item">
+              <div class="cmp-label">AI 예측가</div>
+              <div class="cmp-value" id="cmp-pred">—</div>
+            </div>
+            <div class="cmp-item">
+              <div class="cmp-label">구 중앙값</div>
+              <div class="cmp-value" id="cmp-median">—</div>
+            </div>
+            <div class="cmp-item">
+              <div class="cmp-label">구 평균</div>
+              <div class="cmp-value" id="cmp-avg">—</div>
+            </div>
+            <div class="cmp-item">
+              <div class="cmp-label">구 최고가</div>
+              <div class="cmp-value" id="cmp-max">—</div>
+            </div>
+          </div>
+
+          <!-- 복사/공유 -->
+          <div class="share-row">
+            <button class="copy-btn" id="copy-result-btn">📋 결과 복사</button>
+          </div>
+        </div>
+
+        <!-- ④ error -->
+        <div class="state-view state-error">
+          <div class="err-icon">⚠️</div>
+          <div class="err-msg"    id="err-msg">오류가 발생했습니다.</div>
+          <div class="err-detail" id="err-detail"></div>
+          <button class="retry-btn" onclick="resetForm()">처음으로</button>
+        </div>
+
+        <!-- ⑤ no-data -->
+        <div class="state-view state-no-data">
+          <div class="nd-icon">🔍</div>
+          <p>해당 조건의 거래 데이터가 없습니다.<br>면적이나 연도를 조정해보세요.</p>
+          <button class="retry-btn" onclick="resetForm()">처음으로</button>
+        </div>
+
+        <!-- ⑥ partial (모델 일시 불가 등) -->
+        <div class="state-view state-partial">
+          <div class="pt-icon">⚡</div>
+          <p id="partial-msg">일부 데이터를 처리할 수 없습니다.</p>
+          <button class="retry-btn" onclick="resetForm()">처음으로</button>
+        </div>
+
+      </div><!-- /result-panel -->
+    </div><!-- /left-col -->
+
+    <!-- 오른쪽: 지도 -->
+    <div class="map-container">
+      <div class="card map-card">
+        <div class="card-title">🗺 서울 25개 구 평균 시세 지도</div>
+        <div id="map"></div>
+        <!-- 범례 -->
+        <div class="map-legend">
+          <div class="legend-label">아파트 평균 시세</div>
+          <div class="legend-gradient"></div>
+          <div class="legend-row">
+            <span id="legend-min">—</span>
+            <span style="color:var(--text-muted);font-size:11px;">← 저가 · 고가 →</span>
+            <span id="legend-max">—</span>
+          </div>
+        </div>
+        <div class="map-tip">💡 구를 클릭하면 해당 구가 선택됩니다</div>
+      </div>
+    </div>
+
+  </div><!-- /main-layout -->
+
+  <!-- ── 차트 섹션 ─────────────────────────────────────────────────────── -->
+  <div class="charts-section">
+
+    <!-- 구별 시세 추이 -->
+    <div class="card chart-card">
+      <div class="chart-header">
+        <div class="chart-title" id="trends-title">📈 구별 24개월 시세 추이</div>
+        <div class="chart-sub">월별 평균 실거래가</div>
+      </div>
+      <canvas id="trends-chart"></canvas>
+    </div>
+
+    <!-- 피처 중요도 -->
+    <div class="card chart-card">
+      <div class="chart-header">
+        <div class="chart-title">🎯 AI 예측 피처 중요도</div>
+        <div class="chart-sub">LightGBM Gain 기준</div>
+      </div>
+      <canvas id="fi-chart"></canvas>
+    </div>
+
+    <!-- 구 평균 비교 패널 -->
+    <div class="card compare-card" id="compare-panel">
+      <div class="compare-title">📊 입력 조건 vs 구 평균 비교</div>
+      <div class="compare-placeholder" id="compare-placeholder">
+        <span style="font-size:32px;">📊</span>
+        <span>예측 후 비교 정보가 표시됩니다</span>
+      </div>
+      <div id="compare-content" style="display:none;"></div>
+    </div>
+
+  </div>
+
+  <!-- 토스트 -->
+  <div id="toast"></div>
+
+  <!-- ── 스크립트 ─────────────────────────────────────────────────────── -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
